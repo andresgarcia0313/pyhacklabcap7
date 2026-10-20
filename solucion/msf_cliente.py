@@ -24,6 +24,7 @@ def conectar() -> MsfRpcClient:
     """Abre la sesión con el panel. La clave sale del entorno, nunca del código."""
     clave = clave_requerida(VAR_MSF_PASSWORD)  # lee LAB07_MSF_PASSWORD del entorno
     # MsfRpcClient(clave, server=..., port=..., ssl=...) crea el cliente y entra.
+    # ssl indica si la conexión va cifrada (SSL, Secure Sockets Layer); aquí no.
     return MsfRpcClient(clave, server=MSF_HOST, port=MSF_PORT, ssl=MSF_SSL)
 
 

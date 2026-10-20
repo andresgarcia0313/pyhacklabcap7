@@ -1,71 +1,92 @@
 """
-Prueba de ronda local: levanta los dos simuladores y se conecta con las librerías
-reales (pymetasploit3 y stem). Todo en 127.0.0.1; nada sale del equipo.
+Prueba de ronda local: levanta los dos simuladores DENTRO del proceso, en puertos
+libres que asigna el sistema y con su propia clave. Así pasa aunque usted haya
+dejado encendidos los simuladores de los pasos anteriores. Todo en 127.0.0.1.
 """
-import os
 import socket
-import subprocess
-import sys
-import time
+import threading
 import unittest
+import warnings
+from unittest import mock
 
 import msf_cliente
+import simulador_msfrpcd
+import simulador_tor
 import tor_control
 
-AQUI = os.path.dirname(os.path.abspath(__file__))
 CLAVE = "clave-de-prueba-local"
 
 
-def puerto_abierto(puerto: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", puerto), timeout=0.3):
-            return True
-    except OSError:
-        return False
+def puerto_libre() -> int:
+    """Pide al sistema un puerto TCP libre y lo devuelve."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
-def esperar(puerto: int, abierto: bool, intentos: int = 40) -> bool:
-    for _ in range(intentos):
-        if puerto_abierto(puerto) == abierto:
-            return True
-        time.sleep(0.25)
-    return False
+def abrir_victima() -> tuple:
+    """Deja escuchando un puerto (devuelve su número y el socket para cerrarlo luego)."""
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 0))
+    s.listen(8)
+    threading.Thread(target=_aceptar, args=(s,), daemon=True).start()
+    return s.getsockname()[1], s
 
 
-def lanzar(nombre: str) -> subprocess.Popen:
-    entorno = dict(os.environ, LAB07_MSF_PASSWORD=CLAVE, LAB07_TOR_PASSWORD=CLAVE)
-    return subprocess.Popen([sys.executable, os.path.join(AQUI, nombre)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=entorno)
+def _aceptar(s: socket.socket) -> None:
+    while True:
+        try:
+            conexion, _ = s.accept()
+            conexion.close()
+        except OSError:
+            break
+
+
+def servir(servidor) -> None:
+    threading.Thread(target=servidor.serve_forever, daemon=True).start()
 
 
 class SimuladoresTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        os.environ["LAB07_MSF_PASSWORD"] = CLAVE
-        os.environ["LAB07_TOR_PASSWORD"] = CLAVE
-        cls.procesos = [lanzar("simulador_msfrpcd.py"), lanzar("simulador_tor.py")]
-        if not (esperar(55553, True) and esperar(9051, True) and esperar(10021, True)):
-            cls.tearDownClass()
-            raise unittest.SkipTest("los simuladores no arrancaron a tiempo")
+        # stem imprime un DeprecationWarning propio (setDaemon) en Python nuevo; se silencia.
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        cls.sockets = []
+        cls.va, sa = abrir_victima()
+        cls.vb, sb = abrir_victima()
+        cls.sockets += [sa, sb]
+        cls.vc = puerto_libre()  # puerto sin nadie escuchando: debe quedar cerrado
+        # Panel de Metasploit simulado, en un puerto libre y con su propia clave.
+        cls.msf = simulador_msfrpcd.Servidor(("127.0.0.1", puerto_libre()),
+                                             simulador_msfrpcd.Manejador)
+        cls.puerto_msf = cls.msf.server_address[1]
+        servir(cls.msf)
+        # Control de anonimato simulado, en otro puerto libre.
+        cls.tor = simulador_tor.Servidor(("127.0.0.1", puerto_libre()), simulador_tor.Manejador)
+        cls.puerto_tor = cls.tor.server_address[1]
+        servir(cls.tor)
 
     @classmethod
     def tearDownClass(cls):
-        for proceso in getattr(cls, "procesos", []):
-            proceso.terminate()
-        for proceso in getattr(cls, "procesos", []):
-            try:
-                proceso.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proceso.kill()
-        esperar(55553, False)  # espera a que el panel libere el puerto
+        for servidor in (getattr(cls, "msf", None), getattr(cls, "tor", None)):
+            if servidor is not None:
+                servidor.shutdown()
+                servidor.server_close()
+        for s in getattr(cls, "sockets", []):
+            s.close()
 
     def test_escaneo_encuentra_puertos_abiertos(self):
-        cliente = msf_cliente.conectar()
-        resultado = msf_cliente.ejecutar_portscan(cliente, "127.0.0.1")
-        self.assertEqual(resultado["lab_puertos_abiertos"], [10021, 10022, 10080])
+        with mock.patch.dict("os.environ", {"LAB07_MSF_PASSWORD": CLAVE}), \
+             mock.patch.object(msf_cliente, "MSF_PORT", self.puerto_msf):
+            cliente = msf_cliente.conectar()
+            puertos = f"{self.va},{self.vb},{self.vc}"
+            resultado = msf_cliente.ejecutar_portscan(cliente, "127.0.0.1", puertos=puertos)
+        self.assertEqual(sorted(resultado["lab_puertos_abiertos"]), sorted([self.va, self.vb]))
 
     def test_control_de_anonimato_responde(self):
-        controlador = tor_control.conectar()
+        with mock.patch.dict("os.environ", {"LAB07_TOR_PASSWORD": CLAVE}):
+            controlador = tor_control.conectar(puerto=self.puerto_tor)
         self.assertEqual(tor_control.version(controlador), "0.4.8.10")
         tor_control.rotar_circuito(controlador)  # no debe lanzar error
         controlador.close()

@@ -159,7 +159,8 @@ import os          # permite leer variables de entorno del sistema
 # programa que ejecute una función por la red, como si la llamáramos en local.
 MSF_HOST = "127.0.0.1"  # el panel simulado corre en su propio equipo
 MSF_PORT = 55553        # puerto donde escucha el panel (el que usa msfrpcd)
-MSF_SSL = False         # sin cifrado: es local y de práctica
+# SSL = Secure Sockets Layer (capa de conexión segura): cifra lo que viaja por la red.
+MSF_SSL = False         # False = sin cifrado: es local y de práctica
 
 # --- Puerto de control de la red de anonimato (simulado) -------------------
 TOR_HOST = "127.0.0.1"  # el control simulado corre en su propio equipo
@@ -177,8 +178,10 @@ VAR_TOR_PASSWORD = "LAB07_TOR_PASSWORD"  # clave del puerto de control
 RED_PERMITIDA = "127.0.0.1/32"
 
 # Puertos que se revisan en el objetivo, separados por comas. El simulador deja
-# ABIERTOS el 10021, el 10022 y el 10080 (como FTP, SSH y un servidor web) y deja
-# CERRADOS el 10025 y el 13306, para que el escaneo note la diferencia.
+# ABIERTOS el 10021, el 10022 y el 10080 y deja CERRADOS el 10025 y el 13306, para
+# que el escaneo note la diferencia. Los abiertos imitan tres servicios comunes:
+# FTP (File Transfer Protocol, transferencia de archivos), SSH (Secure Shell,
+# consola remota cifrada) y un servidor web.
 PUERTOS_OBJETIVO = "10021,10022,10025,10080,13306"
 
 
@@ -270,6 +273,7 @@ def conectar() -> MsfRpcClient:
     """Abre la sesión con el panel. La clave sale del entorno, nunca del código."""
     clave = clave_requerida(VAR_MSF_PASSWORD)  # lee LAB07_MSF_PASSWORD del entorno
     # MsfRpcClient(clave, server=..., port=..., ssl=...) crea el cliente y entra.
+    # ssl indica si la conexión va cifrada (SSL, Secure Sockets Layer); aquí no.
     return MsfRpcClient(clave, server=MSF_HOST, port=MSF_PORT, ssl=MSF_SSL)
 
 
@@ -517,7 +521,13 @@ LABORATORIO COMPLETADO
 
 ## Pruebas y validación
 
-Las pruebas automáticas levantan sus propios simuladores: no necesita tenerlos encendidos para correrlas.
+Las pruebas automáticas arman sus propios servicios en puertos libres, así que pasan aunque usted tenga los simuladores encendidos. Aun así, lo más ordenado es **detener los simuladores antes de probar**: pulse Ctrl+C en las terminales A y B, o ejecute este comando en la terminal C:
+
+```bash
+./limpiar.sh
+```
+
+Luego corra las pruebas:
 
 ```bash
 python3 -m unittest test_red_permitida test_integracion test_simuladores
